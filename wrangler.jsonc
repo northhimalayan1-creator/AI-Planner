@@ -16,6 +16,6 @@
   },
   "vars": {
     "SITE_URL": "https://northhimalayan.com",
-    "MODEL": "@cf/meta/llama-3.3-70b-instruct"
+    "MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
   }
 }
