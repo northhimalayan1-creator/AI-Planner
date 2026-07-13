@@ -1,4 +1,4 @@
-// North Himalayan AI Travel Planner — Cloudflare Worker
+10px 10px 2px 10px;\n  }\n  .msg.assistant .bubble{\n    background:var(--panel);\n    border:1px solid var(--line);\n    border-radius:10px 10px 10px 2px;\n    position:relative;\n  }\n  .msg.assistant .bubble::before{\n    content:\"NH \u00b7 CONFIRMED\";\n    display:block;\n    font-family:'JetBrains Mono',monospace;\n    font-size:9px;\n    letter-spacing:0.14em;\n    color:var(--teal);\n    opacity:0.8;\n    margin-bottom:6px;\n  }\n  .sources{\n    display:flex; flex-wrap:wrap; gap:6px; margin-top:2px;\n  }\n  .source-chip{\n    font-family:'JetBrains Mono',monospace;\n    font-size:10px;\n    color:var(--muted);\n    border:1px solid var(--line);\n    padding:3px 7px;\n    border-radius:20px;\n    text-decoration:none;\n    max-width:200px;\n    overflow:hidden;\n    text-overflow:ellipsis;\n    white-space:nowrap;\n  }\n  .source-chip:hover{color:var(--teal); border-color:var(--teal);}\n\n  .empty{\n    margin:auto;\n    text-align:center;\n    color:var(--muted);\n    padding:20px;\n  }\n  .empty h1{\n    font-family:'Fraunces',serif;\n    font-weight:600;\n    color:var(--ink);\n    font-size:22px;\n    margin:0 0 8px;\n  }\n  .empty p{font-size:13.5px; line-height:1.5; margin:0 auto; max-width:340px;}\n  .chips{display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:16px;}\n  .chip-btn{\n    font-size:12.5px;\n    background:var(--panel-2);\n    border:1px solid var(--line);\n    color:var(--ink);\n    padding:8px 12px;\n    border-radius:20px;\n    cursor:pointer;\n  }\n  .chip-btn:active{border-color:var(--brass);}\n\n  .typing{display:flex; gap:4px; padding:4px 0;}\n  .typing span{width:5px; height:5px; border-radius:50%; background:var(--muted); animation:blink 1.2s infinite ease-in-out;}\n  .typing span:nth-child(2){animation-delay:0.2s;}\n  .typing span:nth-child(3){animation-delay:0.4s;}\n  @keyframes blink{0%,80%,100%{opacity:0.25;} 40%{opacity:1;}}\n  @media (prefers-reduced-motion: reduce){ .typing span{animation:none; opacity:0.6;} }\n\n  form{\n    border-top:1px solid var(--line);\n    background:var(--panel);\n    padding:10px 12px calc(10px + env(safe-area-inset-bottom));\n    display:flex;\n    gap:8px;\n    max-width:720px;\n    width:100%;\n    margin:0 auto;\n  }\n  textarea{\n    flex:1;\n    resize:none;\n    background:var(--panel-2);\n    border:1px solid var(--line);\n    color:var(--ink);\n    border-radius:10px;\n    padding:11px 12px;\n    font-family:'Inter',sans-serif;\n    font-size:15px;\n    max-height:120px;\n  }\n  textarea:focus{outline:2px solid var(--brass); outline-offset:1px;}\n  button.send{\n    background:var(--brass);\n    color:#1a1206;\n    border:none;\n    border-radius:10px;\n    padding:0 18px;\n    font-family:'JetBrains Mono',monospace;\n    font-weight:500;\n    font-size:12px;\n    letter-spacing:0.05em;\n    cursor:pointer;\n  }\n  button.send:disabled{opacity:0.5;}\n  ::-webkit-scrollbar{width:6px;}\n  ::-webkit-scrollbar-thumb{background:var(--line); border-radius:6px;}\n</style>\n</head>\n<body>\n  <div class=\"board\">\n    <div class=\"board-top\"// North Himalayan AI Travel Planner — Cloudflare Worker
 // Routes:
 //   GET  /                 -> static chat UI (public/index.html)
 //   GET  /admin            -> static admin/reindex UI (public/admin.html)
@@ -131,6 +131,83 @@ async function retrieve(env, query, topK = 6) {
 
 async function handleChat(request, env) {
   const body = await request.json().catch(() => ({}));
+  const message = (body.message || "").trim();
+  const history = Array.isArray(body.history) ? body.history : [];
+  if (!message) return json({ error: "message is required" }, 400);
+  if (!env.AI) return json({ error: "Server not configured: missing AI binding" }, 500);
+
+  const chunks = await retrieve(env, message, 6);
+  const context = chunks.length
+    ? chunks.map((c) => `Source: ${c.title} (${c.url})\n${c.text}`).join("\n\n---\n\n")
+    : "(No matching articles were found in the knowledge base for this question.)";
+
+  const system = `You are the North Himalayan AI Travel Planner, the trip-planning assistant for northhimalayan.com, a Himalayan and India travel site (Ladakh, Himachal, Spiti, Kashmir, Northeast, Goa hostels/cafes, and more).
+
+Use the CONTEXT below, pulled live from northhimalayan.com, to answer the traveler's question. Rules:
+- Ground specific facts (place names, prices, ratings, itineraries) only in the CONTEXT. Never invent prices, hotel names, or availability that isn't in the CONTEXT.
+- If the CONTEXT doesn't cover the question, say so honestly, then give general, high-level travel guidance instead.
+- Keep answers warm, concise, and practical — like a knowledgeable local friend, not a brochure.
+- When it's natural (trip planning, bookings, custom itineraries), invite the traveler to reach out on WhatsApp: +91-8580805021.
+- Cite the source article titles you drew from when relevant.
+
+CONTEXT:
+${context}`;
+
+  const messages = [
+    { role: "system", content: system },
+    ...history
+      .filter((h) => h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string")
+      .slice(-10),
+    { role: "user", content: message },
+  ];
+
+  let data;
+  try {
+    data = await env.AI.run(env.MODEL || "@cf/meta/llama-3.1-8b-instruct", {
+      messages,
+      max_tokens: 1024,
+    });
+  } catch (e) {
+    return json({ error: "Workers AI error", detail: e.message }, 502);
+  }
+
+  const reply = (data && (data.response || data.result?.response)) || "";
+  return json({ reply, sources: chunks.map((c) => ({ title: c.title, url: c.url })) });
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/chat" && request.method === "POST") {
+      try {
+        return await handleChat(request, env);
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    if (url.pathname === "/api/reindex" && request.method === "POST") {
+      const key = request.headers.get("x-admin-key");
+      if (!env.ADMIN_KEY || key !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+      try {
+        const n = await reindex(env);
+        return json({ ok: true, chunks: n });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    if (url.pathname === "/api/status" && request.method === "GET") {
+      const meta = await env.KB.get("kb:meta");
+      return json(meta ? JSON.parse(meta) : { count: 0, updatedAt: null });
+    }
+
+    if (url.pathname === "/" && request.method === "GET") {
+      return new Response(INDEX_HTML, { headers: { "content-type": "text/html;charset=UTF-8" } });
+    }
+
+    if (url.pathname === "/admin" && request.methuest.json().catch(() => ({}));
   const message = (body.message || "").trim();
   const history = Array.isArray(body.history) ? body.history : [];
   if (!message) return json({ error: "message is required" }, 400);
